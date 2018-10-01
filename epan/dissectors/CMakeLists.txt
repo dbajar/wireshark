@@ -1043,6 +1043,7 @@ set(DISSECTOR_SRC
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-gnutella.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-gopher.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-gpef.c
+	${CMAKE_CURRENT_SOURCE_DIR}/packet-gpgl.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-gprs-llc.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-gprscdr.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-gre.c
