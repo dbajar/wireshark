@@ -9,8 +9,6 @@
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 
-// TODO: Add definitions for graphtec plotters
-// TODO: Add dissector per plotter device
 // TODO: Colouring for info section
 // TODO: Heuristics
 // TODO: Follow stream
@@ -866,6 +864,11 @@ dissect_gpgl_bulk(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void *dat
     usb_conv_info_t *usb_conv_info;
     guint8 length;
 
+    usb_conv_info = (usb_conv_info_t *) data;
+    if(usb_conv_info->transfer_type != URB_BULK) {
+        return(0);
+    }
+
     /* create display subtree for the protocol */
     ti = proto_tree_add_item(tree, proto_gpgl, tvb, 0, -1, ENC_NA);
     gpgl_tree = proto_item_add_subtree(ti, ett_gpgl);
@@ -873,8 +876,6 @@ dissect_gpgl_bulk(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void *dat
     /* Set the Protocol column to the constant string of gpgl */
     col_set_str(pinfo->cinfo, COL_PROTOCOL, "GP-GL");
     col_clear(pinfo->cinfo, COL_INFO);
-
-    usb_conv_info = (usb_conv_info_t *) data;
 
     if(!usb_conv_info->direction) {
         length = dissect_gpgl_command_block(tvb, pinfo, gpgl_tree);
@@ -975,7 +976,16 @@ proto_register_gpgl(void)
 void
 proto_reg_handoff_gpgl(void)
 {
-    dissector_add_uint("usb.bulk", IF_CLASS_PRINTER, gpgl_bulk_handle);
+    dissector_add_uint("usb.product", 0x0b4d110a, gpgl_bulk_handle);  // Graphtec CC200-20
+    dissector_add_uint("usb.product", 0x0b4d111a, gpgl_bulk_handle);  // Graphtec CC200-20
+    dissector_add_uint("usb.product", 0x0b4d111c, gpgl_bulk_handle);  // Graphtec Silhouette SD 1
+    dissector_add_uint("usb.product", 0x0b4d111d, gpgl_bulk_handle);  // Graphtec Silhouette SD 2
+    dissector_add_uint("usb.product", 0x0b4d1121, gpgl_bulk_handle);  // Graphtec Silhouette Cameo
+    dissector_add_uint("usb.product", 0x0b4d112b, gpgl_bulk_handle);  // Graphtec Silhouette Cameo 2
+    dissector_add_uint("usb.product", 0x0b4d112f, gpgl_bulk_handle);  // Graphtec Silhouette Cameo 3
+    dissector_add_uint("usb.product", 0x0b4d1123, gpgl_bulk_handle);  // Graphtec Silhouette Portrait
+    dissector_add_uint("usb.product", 0x0b4d1132, gpgl_bulk_handle);  // Graphtec Silhouette Portrait 2
+    // dissector_add_uint("usb.bulk", IF_CLASS_PRINTER, gpgl_bulk_handle);
 }
 
 /*
