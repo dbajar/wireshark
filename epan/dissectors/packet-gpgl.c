@@ -9,7 +9,6 @@
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 
-// TODO: Display coordinates in SU and mm (FF, FC)
 // TODO: Add definitions for graphtec plotters
 // TODO: Add dissector per plotter device
 // TODO: Colouring for info section
@@ -63,7 +62,10 @@ static int proto_gpgl_command_set_speed = -1;
 static int proto_gpgl_command_set_pressure = -1;
 static int proto_gpgl_command_set_overcut = -1;
 static int proto_gpgl_command_set_overcut_offset = -1;
+static int proto_gpgl_command_set_overcut_offset_x = -1;
+static int proto_gpgl_command_set_overcut_offset_y = -1;
 static int proto_gpgl_command_set_blade_offset = -1;
+static int proto_gpgl_command_set_blade_offset_radius = -1;
 static int proto_gpgl_command_set_auto_blade = -1;
 static int proto_gpgl_command_set_line_type = -1;
 static int proto_gpgl_command_move_abs = -1;
@@ -94,9 +96,6 @@ static int hf_gpgl_command_tool_holder_num = -1;
 static int hf_gpgl_command_set_speed_speed = -1;
 static int hf_gpgl_command_set_pressure_pressure = -1;
 static int hf_gpgl_command_set_overcut_state = -1;
-static int hf_gpgl_command_set_overcut_offset_x = -1;
-static int hf_gpgl_command_set_overcut_offset_y = -1;
-static int hf_gpgl_command_set_blade_offset_r = -1;
 static int hf_gpgl_command_set_blade_offset_arg = -1;
 static int hf_gpgl_command_set_auto_blade_depth = -1;
 static int hf_gpgl_command_set_line_type_arg = -1;
@@ -176,9 +175,29 @@ static const value_string response_type_vs[] = {
 
 typedef struct arg_struct {
     int hf;
-    const value_string *vstr;
+    const void *vstr;
     field_display_e btype;
 } arg_struct;
+
+typedef void (*gpgl_custom_fmt_func_t)(gchar *, gchar *, guint32);
+
+static void
+gpgl_tenths_fmt(gchar *s1, gchar *s2, guint32 v)
+{
+    snprintf(s1, ITEM_LABEL_LENGTH, "%g mm (%d)", (gint32) v * 0.1, v);
+    if(s2 != NULL) {
+        snprintf(s2, ITEM_LABEL_LENGTH, "%g mm", (gint32) v * 0.1);
+    }
+}
+
+static void
+gpgl_su_mm_fmt(gchar *s1, gchar *s2, guint32 v)
+{
+    snprintf(s1, ITEM_LABEL_LENGTH, "%g mm (%d SU)", (gint32) v * 0.05, v);
+    if(s2 != NULL) {
+        snprintf(s2, ITEM_LABEL_LENGTH, "%g mm", (gint32) v * 0.05);
+    }
+}
 
 static int
 strtoi32(tvbuff_t *tvb, int offset, int length, gint32 *value)
@@ -200,36 +219,59 @@ dissect_gpgl_arg(proto_tree *tree, tvbuff_t *tvb, int offset, int length, arg_st
     int delim_offset;
 
     arg_offset = offset;
-    if(arg->vstr != NULL) {
-        proto_tree_add_item(tree, arg->hf, tvb, offset, 1, ENC_NA);
+    if(arg->btype == BASE_DEC) {
+        // TODO: Convert to int using strtoi32 to find real end
+        int d_offset = tvb_find_guint8(tvb, offset, length, ',');
+        int a_len = d_offset < 0 ? length : d_offset - offset;
+        proto_tree_add_item(tree, arg->hf, tvb, offset, a_len, ENC_NA);
         if(arg_buf != NULL) {
-            gint8 value = tvb_get_guint8(tvb, offset);
-            snprintf(arg_buf, arg_buf_len, "%s%s", arg_prefix, val_to_str(value, arg->vstr, "Unknown (%d)"));
+            guint8 *value = tvb_get_string_enc(wmem_packet_scope(), tvb, offset, a_len, ENC_UTF_8);
+            snprintf(arg_buf, arg_buf_len, "%s%s", arg_prefix, value);
         }
-        offset++;
-        length--;
+        offset += a_len;
+        length -= a_len;
+    } else if(arg->btype == BASE_CUSTOM) {
+        int value;
+        int v_len = strtoi32(tvb, offset, length, &value);
+        if(v_len < 0) {
+            return(-1);
+        }
+        int d_offset = tvb_find_guint8(tvb, offset + v_len, length - v_len, ',');
+        if(d_offset > offset + v_len) {
+            // TODO: Log junk after arg
+        }
+        int a_len = d_offset < 0 ? length : d_offset - offset;
+        proto_item *arg_item = proto_tree_add_item(tree, arg->hf, tvb, offset, v_len, ENC_NA);
+        if(arg->vstr != NULL) {
+            char s1[ITEM_LABEL_LENGTH] = { '\0' };
+            char s2[ITEM_LABEL_LENGTH] = { '\0' };
+            ((gpgl_custom_fmt_func_t) arg->vstr)(s1, s2, value);
+            proto_item_append_text(arg_item, "%s", s1);
+            if(arg_buf != NULL) {
+                snprintf(arg_buf, arg_buf_len, "%s%s", arg_prefix, s2);
+            }
+        }
+        offset += a_len;
+        length -= a_len;
+    } else if(arg->btype == BASE_HEX) {
+        int d_offset = tvb_find_guint8(tvb, offset, length, ',');
+        int a_len = d_offset < 0 ? length : d_offset - offset;
+        proto_tree_add_item(tree, arg->hf, tvb, offset, a_len, ENC_NA);
+        if(arg_buf != NULL) {
+            gchar *value = tvb_bytes_to_str(wmem_packet_scope(), tvb, offset, a_len);
+            snprintf(arg_buf, arg_buf_len, "%s\\x%s", arg_prefix, value);
+        }
+        offset += a_len;
+        length -= a_len;
     } else {
-        if(arg->btype == BASE_DEC) {
-            // TODO: Convert to int using strtoi32 to find real end
-            int d_offset = tvb_find_guint8(tvb, offset, length, ',');
-            int a_len = d_offset < 0 ? length : d_offset - offset;
-            proto_tree_add_item(tree, arg->hf, tvb, offset, a_len, ENC_NA);
+        if(arg->vstr != NULL) {
+            proto_tree_add_item(tree, arg->hf, tvb, offset, 1, ENC_NA);
             if(arg_buf != NULL) {
-                guint8 *value = tvb_get_string_enc(wmem_packet_scope(), tvb, offset, a_len, ENC_UTF_8);
-                snprintf(arg_buf, arg_buf_len, "%s%s", arg_prefix, value);
+                gint8 value = tvb_get_guint8(tvb, offset);
+                snprintf(arg_buf, arg_buf_len, "%s%s", arg_prefix, val_to_str(value, (const value_string *) arg->vstr, "Unknown (%d)"));
             }
-            offset += a_len;
-            length -= a_len;
-        } else if(arg->btype == BASE_HEX) {
-            int d_offset = tvb_find_guint8(tvb, offset, length, ',');
-            int a_len = d_offset < 0 ? length : d_offset - offset;
-            proto_tree_add_item(tree, arg->hf, tvb, offset, a_len, ENC_NA);
-            if(arg_buf != NULL) {
-                gchar *value = tvb_bytes_to_str(wmem_packet_scope(), tvb, offset, a_len);
-                snprintf(arg_buf, arg_buf_len, "%s\\x%s", arg_prefix, value);
-            }
-            offset += a_len;
-            length -= a_len;
+            offset++;
+            length--;
         } else {
             int d_offset = tvb_find_guint8(tvb, offset, length, ',');
             int a_len = d_offset < 0 ? length : d_offset - offset;
@@ -681,15 +723,15 @@ dissect_gpgl_command_block(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree)
             dissect_gpgl_command_args(tree, tvb, offset, delim_offset - offset + 1, FALSE, 2, proto_gpgl_command_set_overcut, args, p_in);
         } else if(!strncmp("FF", command, 2)) {
             arg_struct args[] = {
-                { hf_gpgl_command_set_overcut_offset_x, NULL, BASE_DEC },
-                { hf_gpgl_command_set_overcut_offset_y, NULL, BASE_DEC },
+                { proto_gpgl_command_set_overcut_offset_x, CF_FUNC(gpgl_tenths_fmt), BASE_CUSTOM },
+                { proto_gpgl_command_set_overcut_offset_y, CF_FUNC(gpgl_tenths_fmt), BASE_CUSTOM },
                 { hf_gpgl_command_tool_holder_num, tool_holder_num_vs, BASE_NONE },
                 { -1, NULL, BASE_NONE }
             };
             dissect_gpgl_command_args(tree, tvb, offset, delim_offset - offset + 1, FALSE, 2, proto_gpgl_command_set_overcut_offset, args, p_in);
         } else if(!strncmp("FC", command, 2)) {
             arg_struct args[] = {
-                { hf_gpgl_command_set_blade_offset_r, NULL, BASE_DEC },
+                { proto_gpgl_command_set_blade_offset_radius, CF_FUNC(gpgl_su_mm_fmt), BASE_CUSTOM },
                 { hf_gpgl_command_set_blade_offset_arg, NULL, BASE_NONE },
                 { hf_gpgl_command_tool_holder_num, tool_holder_num_vs, BASE_NONE },
                 { -1, NULL, BASE_NONE }
@@ -864,9 +906,6 @@ proto_register_gpgl(void)
         { &hf_gpgl_command_set_speed_speed, { "Speed", "gpgl.command.set_speed.speed", FT_STRING, BASE_NONE, NULL, 0x0, NULL, HFILL } },
         { &hf_gpgl_command_set_pressure_pressure, { "Pressure", "gpgl.command.set_pressure.pressure", FT_STRING, BASE_NONE, NULL, 0x0, NULL, HFILL } },
         { &hf_gpgl_command_set_overcut_state, { "State", "gpgl.command.set_overcut.state", FT_CHAR, BASE_NONE, VALS(feature_state_vs), 0x0, NULL, HFILL } },
-        { &hf_gpgl_command_set_overcut_offset_x, { "X", "gpgl.command.set_overcut_offset.x", FT_STRING, BASE_NONE, NULL, 0x0, NULL, HFILL } },
-        { &hf_gpgl_command_set_overcut_offset_y, { "Y", "gpgl.command.set_overcut_offset.y", FT_STRING, BASE_NONE, NULL, 0x0, NULL, HFILL } },
-        { &hf_gpgl_command_set_blade_offset_r, { "Radius", "gpgl.command.set_blade_offset.d", FT_STRING, BASE_NONE, NULL, 0x0, NULL, HFILL } },
         { &hf_gpgl_command_set_blade_offset_arg, { "Arg", "gpgl.command.set_blade_offset.arg", FT_STRING, BASE_NONE, NULL, 0x0, NULL, HFILL } },
         { &hf_gpgl_command_set_auto_blade_depth, { "Depth", "gpgl.command.set_auto_blade.depth", FT_STRING, BASE_NONE, NULL, 0x0, NULL, HFILL } },
         { &hf_gpgl_command_set_line_type_arg, { "Arg", "gpgl.command.set_line_type.arg", FT_STRING, BASE_NONE, NULL, 0x0, NULL, HFILL } },
@@ -913,7 +952,10 @@ proto_register_gpgl(void)
     proto_gpgl_command_set_pressure = proto_register_protocol_in_name_only("GPGL Command - Set Pressure", "Set pressure", "gpgl.commands.set_pressure", proto_gpgl, FT_BYTES);
     proto_gpgl_command_set_overcut = proto_register_protocol_in_name_only("GPGL Command - Set Overcut", "Set overcut", "gpgl.commands.set_overcut", proto_gpgl, FT_BYTES);
     proto_gpgl_command_set_overcut_offset = proto_register_protocol_in_name_only("GPGL Command - Set Overcut Offset", "Set overcut offset", "gpgl.commands.set_overcut_offset", proto_gpgl, FT_BYTES);
+    proto_gpgl_command_set_overcut_offset_x = proto_register_protocol_in_name_only("X: ", "X: ", "gpgl.commands.set_overcut_offset.x", proto_gpgl, FT_BYTES);
+    proto_gpgl_command_set_overcut_offset_y = proto_register_protocol_in_name_only("Y: ", "Y: ", "gpgl.commands.set_overcut_offset.y", proto_gpgl, FT_BYTES);
     proto_gpgl_command_set_blade_offset = proto_register_protocol_in_name_only("GPGL Command - Set Blade Offset", "Set blade offset", "gpgl.commands.set_blade_offset", proto_gpgl, FT_BYTES);
+    proto_gpgl_command_set_blade_offset_radius = proto_register_protocol_in_name_only("Radius: ", "Radius: ", "gpgl.commands.set_blade_offset.radius", proto_gpgl, FT_BYTES);
     proto_gpgl_command_set_auto_blade = proto_register_protocol_in_name_only("GPGL Command - Set Auto-Blade", "Set auto-blade", "gpgl.commands.set_auto_blade", proto_gpgl, FT_BYTES);
     proto_gpgl_command_set_line_type = proto_register_protocol_in_name_only("GPGL Command - Set Line Type", "Set line type", "gpgl.commands.set_line_type", proto_gpgl, FT_BYTES);
     proto_gpgl_command_move_abs = proto_register_protocol_in_name_only("GPGL Command - Move (abs)", "Move (abs)", "gpgl.commands.move_abs", proto_gpgl, FT_BYTES);
