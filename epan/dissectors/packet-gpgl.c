@@ -624,7 +624,7 @@ dissect_gpgl_command_block(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree)
         } else if(!strncmp("TB", command, 2)) {
             if(!strncmp("71", &command[2], 2)) {
                 dissect_gpgl_command_args(tree, tvb, offset, delim_offset - offset + 1, FALSE, 4, proto_gpgl_command_TB71, NULL, p_in);
-            } else if(!strncmp("50", &command[2], 2)) {  // TODO: I don't think it's TB50, I think it's TB5<arg>,<arg>
+            } else if(!strncmp("50", &command[2], 2)) {
                 arg_struct args[] = {
                     { hf_gpgl_command_tb_arg, NULL, BASE_NONE },
                     { hf_gpgl_command_orientation_type, orientation_type_vs, BASE_NONE },
